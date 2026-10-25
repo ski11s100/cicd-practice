@@ -3,7 +3,7 @@
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-app = FastAPI(title="Todo API")
+app = FastAPI(title="Todo API v1")
 
 # Пока вместо базы данных — обычный список в памяти.
 tasks: list[dict] = []
