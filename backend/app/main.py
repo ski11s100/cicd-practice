@@ -1,13 +1,27 @@
-"""API списка задач. Версия 1: задачи хранятся в памяти процесса."""
+"""REST API списка задач."""
+
+import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-app = FastAPI(title="Todo API v1")
+from app.db import get_conn
+from app.migrate import migrate
 
-# Пока вместо базы данных — обычный список в памяти.
-tasks: list[dict] = []
-next_id = 1
+# Один и тот же образ работает во всех контурах; различается только окружение.
+APP_ENV = os.environ.get("APP_ENV", "local")
+# Версию «вшивает» в образ пайплайн при сборке (глава 9).
+APP_VERSION = os.environ.get("APP_VERSION", "local")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    migrate()
+    yield
+
+
+app = FastAPI(title="Todo API", lifespan=lifespan)
 
 
 class TaskIn(BaseModel):
@@ -20,40 +34,49 @@ class TaskPatch(BaseModel):
     done: bool
 
 
-def find_task(task_id: int) -> dict:
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-    raise HTTPException(status_code=404, detail="Задача не найдена")
-
-
 @app.get("/api/health")
 def health():
+    with get_conn() as conn:
+        conn.execute("SELECT 1")
     return {"status": "ok"}
+
+
+@app.get("/api/info")
+def info():
+    return {"env": APP_ENV, "version": APP_VERSION}
 
 
 @app.get("/api/tasks")
 def list_tasks():
-    return tasks
+    with get_conn() as conn:
+        return conn.execute("SELECT id, title, done, created_at FROM tasks ORDER BY id").fetchall()
 
 
 @app.post("/api/tasks", status_code=201)
 def create_task(task: TaskIn):
-    global next_id
-    new_task = {"id": next_id, "title": task.title, "done": False}
-    tasks.append(new_task)
-    next_id += 1
-    return new_task
+    with get_conn() as conn:
+        return conn.execute(
+            "INSERT INTO tasks (title) VALUES (%s) RETURNING id, title, done, created_at",
+            (task.title,),
+        ).fetchone()
 
 
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, patch: TaskPatch):
-    task = find_task(task_id)
-    task["done"] = patch.done
-    return task
+    with get_conn() as conn:
+        row = conn.execute(
+            "UPDATE tasks SET done = %s WHERE id = %s RETURNING id, title, done, created_at",
+            (patch.done, task_id),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    return row
 
 
 @app.delete("/api/tasks/{task_id}", status_code=204)
 def delete_task(task_id: int):
-    tasks.remove(find_task(task_id))
+    with get_conn() as conn:
+        deleted = conn.execute("DELETE FROM tasks WHERE id = %s", (task_id,)).rowcount
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
     return Response(status_code=204)
