@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
 jobs:
   lint:
     name: lint
@@ -70,21 +73,120 @@ jobs:
     name: build
     needs: [lint, test]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Вход в реестр GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Определить версию
+        id: version
+        run: |
+          TAG="sha-$(git rev-parse HEAD | cut -c1-7)"
+          REUSE=false
+          if [ "$GITHUB_REF" = "refs/heads/main" ] \
+             && git rev-parse -q --verify HEAD^2 >/dev/null \
+             && git diff --quiet HEAD^2 HEAD; then
+            CANDIDATE="sha-$(git rev-parse HEAD^2 | cut -c1-7)"
+            if docker manifest inspect "$IMAGE_PREFIX-backend:$CANDIDATE" >/dev/null 2>&1; then
+              TAG="$CANDIDATE"
+              REUSE=true
+            fi
+          fi
+          echo "Версия: $TAG (переиспользуем готовый образ: $REUSE)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "reuse=$REUSE" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+
       - name: Сборка образов
+        if: steps.version.outputs.reuse != 'true'
         run: docker compose build
+
       - name: Запуск всего приложения
+        if: steps.version.outputs.reuse != 'true'
         run: docker compose up -d --wait --wait-timeout 120
+
       - name: Смоук-тест через nginx
+        if: steps.version.outputs.reuse != 'true'
         run: |
           curl -fsS localhost:8082/api/health
+          curl -fsS localhost:8082/api/info | grep "\"version\":\"$IMAGE_TAG\""
           curl -fsS -X POST localhost:8082/api/tasks \
             -H 'Content-Type: application/json' -d '{"title":"smoke"}'
           curl -fsS localhost:8082/ | grep -q "Список задач"
+
       - name: Логи (если упало)
         if: failure()
         run: docker compose logs
+
       - name: Остановить
-        if: always()
+        if: always() && steps.version.outputs.reuse != 'true'
         run: docker compose down -v
+
+      - name: Опубликовать образы в реестре
+        if: github.event_name == 'push' && steps.version.outputs.reuse != 'true'
+        run: docker compose push backend frontend
+
+  deploy-dev:
+    name: deploy → dev
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: [self-hosted, Windows]
+    environment:
+      name: development
+      url: http://localhost:8081
+    concurrency: deploy-dev
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Выкатка на DEV + смоук-тест
+        shell: powershell
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: .\deploy\deploy.ps1 -Target dev -Tag $env:TAG
+
+  deploy-prod:
+    name: deploy → prod
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Windows]
+    environment:
+      name: production
+      url: http://localhost:8080
+    concurrency: deploy-prod
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Выкатка на PROD + смоук-тест
+        shell: powershell
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: .\deploy\deploy.ps1 -Target prod -Tag $env:TAG

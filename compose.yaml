@@ -21,7 +21,10 @@ services:
       retries: 20
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        APP_VERSION: ${IMAGE_TAG:-local}
     image: ${IMAGE_PREFIX:-cicd-practice}-backend:${IMAGE_TAG:-local}
     environment:
       APP_ENV: local
