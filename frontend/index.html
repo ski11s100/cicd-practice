@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Список задач</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="env-banner" class="banner">Загрузка…</div>
+
+  <main>
+    <h1>Список задач</h1>
+
+    <form id="task-form">
+      <input id="task-title" placeholder="Что нужно сделать?" maxlength="200" autocomplete="off" required>
+      <button type="submit">Добавить</button>
+    </form>
+
+    <p id="error" class="error" hidden></p>
+    <ul id="tasks"></ul>
+    <p id="empty" class="muted" hidden>Задач пока нет.</p>
+  </main>
+
+  <footer class="muted">Версия: <span id="version">—</span></footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
