@@ -1,0 +1,44 @@
+name: Rollback / выкатить версию
+
+# Запуск вручную: вкладка Actions → «Rollback / выкатить версию» → Run workflow.
+# Выкатывает любую ранее собранную версию (её образ уже лежит в GHCR) — так делается откат.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Контур
+        type: choice
+        options: [dev, prod]
+        default: dev
+      tag:
+        description: Версия, например sha-1a2b3c4 (видна внизу страницы приложения и в истории Actions)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: rollback → ${{ inputs.target }}
+    runs-on: [self-hosted, Windows]
+    # prod и тут требует одобрения — любое изменение прода проходит через Approve.
+    environment:
+      name: ${{ inputs.target == 'prod' && 'production' || 'development' }}
+      url: ${{ inputs.target == 'prod' && 'http://localhost:8080' || 'http://localhost:8081' }}
+    concurrency: deploy-${{ inputs.target }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Выкатка выбранной версии + смоук-тест
+        shell: powershell
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          TARGET: ${{ inputs.target }}
+          TAG: ${{ inputs.tag }}
+        run: .\deploy\deploy.ps1 -Target $env:TARGET -Tag $env:TAG
