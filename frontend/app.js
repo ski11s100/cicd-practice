@@ -67,6 +67,9 @@ function renderTask(task) {
 async function loadTasks() {
   const tasks = await api("/tasks");
   list.replaceChildren(...tasks.map(renderTask));
+  const left = tasks.filter((task) => !task.done).length;
+  document.getElementById("counter").textContent =
+    tasks.length > 0 ? `Осталось: ${left} из ${tasks.length}` : "";
   document.getElementById("empty").hidden = tasks.length > 0;
   errorBox.hidden = true;
 }
